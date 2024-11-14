@@ -59,7 +59,8 @@ def execute(filters=None):
 
 	columns = get_columns(filters.periodicity, period_list, filters.accumulated_values, filters.company)
 
-	columns = get_difference_columns(columns)
+	columns = get_difference_columns(columns, filters)
+	
 	chart = get_chart_data(filters, columns, income, expense, net_profit_loss)
 
 	currency = filters.presentation_currency or frappe.get_cached_value(
@@ -86,7 +87,7 @@ def get_difference_data(columns, data):
 
 	return data
 
-def get_difference_columns(columns):
+def get_difference_columns(columns, filters):
 	flag = False
 	old_value = {}
 	columns_new = []
@@ -95,27 +96,34 @@ def get_difference_columns(columns):
 		columns_new.append(row)
 
 		if flag and row.get("fieldtype")  == "Currency":
-			columns_new.append({
-				'fieldname': f'diff_with_{old_value.get("fieldname")}_and_{row.get("fieldname")}', 
-				'label': f'Diff W/{old_value.get("label")}', 
-				'fieldtype': 'Currency', 
-				'options': 'currency', 
-				'width': 150
-			})
+			if filters.get("show_difference") in ["All", "Monthly"]:
+				columns_new.append({
+					'fieldname': f'diff_with_{old_value.get("fieldname")}_and_{row.get("fieldname")}', 
+					'label': f'Diff W/{old_value.get("label")}', 
+					'fieldtype': 'Currency', 
+					'options': 'currency', 
+					'width': 150
+				})
 
-			month = row.get("fieldname").split("_")
-			month = f"{month[0]}_{int(month[1])-1}"
+			if filters.get("show_difference") in ["All", "Yearly"]:
+			
+				month = row.get("fieldname").split("_")
+				
+				if len(month) < 2:
+					continue
+		
+				month = f"{month[0]}_{int(month[1])-1}"
 
-			month_name = row.get("label").split(" ")
-			month_name = f"{month_name[0]} {int(month_name[1])-1}"
+				month_name = row.get("label").split(" ")
+				month_name = f"{month_name[0]} {int(month_name[1])-1}"
 
-			columns_new.append({
-				'fieldname': f'diff_with_{month}_and_{row.get("fieldname")}', 
-				'label': f'Diff W/{month_name}', 
-				'fieldtype': 'Currency', 
-				'options': 'currency', 
-				'width': 150
-			})
+				columns_new.append({
+					'fieldname': f'diff_with_{month}_and_{row.get("fieldname")}', 
+					'label': f'Diff W/{month_name}', 
+					'fieldtype': 'Currency', 
+					'options': 'currency', 
+					'width': 150
+				})
 
 		if row.get("fieldtype")  == "Currency":
 			flag = True
