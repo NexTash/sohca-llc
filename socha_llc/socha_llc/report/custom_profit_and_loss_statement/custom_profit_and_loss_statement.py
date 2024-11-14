@@ -36,6 +36,19 @@ def execute(filters=None):
 		ignore_accumulated_values_for_fy=True,
 	)
 
+	asset = get_data(
+		filters.company,
+		"Asset",
+		"Credit",
+		period_list,
+		filters=filters,
+		accumulated_values=filters.accumulated_values,
+		ignore_closing_entries=True,
+		ignore_accumulated_values_for_fy=True,
+	)
+	
+	income.extend(asset)
+	
 	expense = get_data(
 		filters.company,
 		"Expense",
@@ -46,6 +59,19 @@ def execute(filters=None):
 		ignore_closing_entries=True,
 		ignore_accumulated_values_for_fy=True,
 	)
+
+	liability = get_data(
+		filters.company,
+		"Liability",
+		"Credit",
+		period_list,
+		filters=filters,
+		accumulated_values=filters.accumulated_values,
+		ignore_closing_entries=True,
+		ignore_accumulated_values_for_fy=True,
+	)
+	
+	expense.extend(liability)
 
 	net_profit_loss = get_net_profit_loss(
 		income, expense, period_list, filters.company, filters.presentation_currency
