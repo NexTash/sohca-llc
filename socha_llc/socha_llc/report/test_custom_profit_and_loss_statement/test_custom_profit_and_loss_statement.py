@@ -100,18 +100,36 @@ def execute(filters=None):
 	return columns, data, None, chart, report_summary, primitive_summary
 
 def get_difference_data(columns, data):
-	diff_w_columns = []
-	for row in columns:
-		if "diff_with_" in row.get("fieldname"): 
-			diff_w_columns.append(row.get("fieldname"))
+    diff_w_columns = []
+    percent_diff_columns = []
+    for row in columns:
+        if "diff_with_" in row.get("fieldname"): 
+            diff_w_columns.append(row.get("fieldname"))
+        if "percent_diff_with_" in row.get("fieldname"):
+            percent_diff_columns.append(row.get("fieldname"))
 
-	for row in data:
-		for col in diff_w_columns:
-			months = col.split("diff_with_")[1].split("_and_")
-			
-			row[col] = row.get(months[1], 0) - row.get(months[0], 0)
+    for row in data:
+        for col in diff_w_columns:
+            months = col.split("diff_with_")[1].split("_and_")
+            old_value = row.get(months[0], 0)  
+            new_value = row.get(months[1], 0)  
 
-	return data
+            row[col] = new_value - old_value
+
+        for col in percent_diff_columns:
+            months = col.split("percent_diff_with_")[1].split("_and_")
+            old_value = row.get(months[0], 0)  
+            new_value = row.get(months[1], 0)  
+
+            # Avoid division by zero by checking if old_value is not 0
+            if old_value != 0:
+                percentage_diff = ((new_value - old_value) / old_value) * 100
+            else:
+                percentage_diff = 0  
+            row[col] = percentage_diff  
+
+    return data
+
 
 def get_difference_columns(columns, filters):
 	flag = False
@@ -119,10 +137,11 @@ def get_difference_columns(columns, filters):
 	columns_new = []
 
 	for row in columns:
-		columns_new.append(row)
-
+		columns_new.append(row) 
+        
 		if flag and row.get("fieldtype")  == "Currency":
-			if filters.get("show_difference") in [ "Monthly"]:
+
+			if filters.get("show_difference") in ["Monthly"]:
 				columns_new.append({
 					'fieldname': f'diff_with_{old_value.get("fieldname")}_and_{row.get("fieldname")}', 
 					'label': f'Diff W/{old_value.get("label")}', 
@@ -130,19 +149,26 @@ def get_difference_columns(columns, filters):
 					'options': 'currency', 
 					'width': 150
 				})
+				columns_new.append({
+						'fieldname': f'percent_diff_with_{old_value.get("fieldname")}_and_{row.get("fieldname")}',
+						'label': f'Percent Diff W/{old_value.get("label")}', 
+						'fieldtype': 'Percent', 
+						'width': 150
+				})	
 
-			if filters.get("show_difference") in [ "Yearly"]:
+			if filters.get("show_difference") in ["Yearly"]:
 			
 				month = row.get("fieldname").split("_")
 				
 				if len(month) < 2:
-					continue
+					continue 
 		
 				month = f"{month[0]}_{int(month[1])-1}"
 
 				month_name = row.get("label").split(" ")
 				month_name = f"{month_name[0]} {int(month_name[1])-1}"
-
+				# Adjust the year to the previous year for yearly comparison
+				# month_name = f"{month[0]}_{int(month[1]) - 12}"
 				columns_new.append({
 					'fieldname': f'diff_with_{month}_and_{row.get("fieldname")}', 
 					'label': f'Diff W/{month_name}', 
@@ -151,6 +177,14 @@ def get_difference_columns(columns, filters):
 					'width': 150
 				})
 
+
+  # Add percentage difference
+				columns_new.append({
+						'fieldname': f'percent_diff_with_{month_name}_and_{row.get("fieldname")}',
+						'label': f'Percent Diff W/{month_name}', 
+						'fieldtype': 'Percent', 
+						'width': 150
+				})
 		if row.get("fieldtype")  == "Currency":
 			flag = True
 		
@@ -168,13 +202,11 @@ def get_report_summary(
 ):
 	net_income, net_expense, net_profit = 0.0, 0.0, 0.0
 
-	# from consolidated financial statement
 	if filters.get("accumulated_in_group_company"):
 		period_list = get_filtered_list_for_consolidated_report(filters, period_list)
 
 	if filters.accumulated_values:
-		# when 'accumulated_values' is enabled, periods have running balance.
-		# so, last period will have the net amount.
+		
 		key = period_list[-1].key
 		if income:
 			net_income = income[-2].get(key)

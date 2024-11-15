@@ -1,3 +1,5 @@
+// Copyright (c) 2024, Socha LLc and contributors
+// For license information, please see license.txt
 // Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 // License: GNU General Public License v3. See license.txt
 
@@ -39,7 +41,7 @@ frappe.query_reports["Custom Profit and Loss Statement"]["filters"].push({
 	fieldname: "show_difference",
 	label: __("Show Difference Columns"),
 	fieldtype: "Select",
-	options: [" " , "Monthly" , "Yearly"],
+	options: [" ", "Monthly", "Yearly"],
 	default: "",
 });
 
