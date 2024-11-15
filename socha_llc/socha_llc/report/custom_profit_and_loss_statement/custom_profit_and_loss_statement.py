@@ -1,10 +1,9 @@
-# Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
-# License: GNU General Public License v3. See license.txt
-
+# Copyright (c) 2024, Socha LLC and contributors
+# For license information, please see license.txt
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 from erpnext.accounts.report.financial_statements import (
 	get_columns,
@@ -25,6 +24,41 @@ def execute(filters=None):
 		company=filters.company,
 	)
 
+	filters.period_start_date = period_list[0]["year_start_date"]
+
+	currency = filters.presentation_currency or frappe.get_cached_value(
+		"Company", filters.company, "default_currency"
+	)
+
+	asset = get_data(
+		filters.company,
+		"Asset",
+		"Debit",
+		period_list,
+		only_current_fiscal_year=False,
+		filters=filters,
+		accumulated_values=filters.accumulated_values,
+	)
+
+	liability = get_data(
+		filters.company,
+		"Liability",
+		"Credit",
+		period_list,
+		only_current_fiscal_year=False,
+		filters=filters,
+		accumulated_values=filters.accumulated_values,
+	)
+
+	equity = get_data(
+		filters.company,
+		"Equity",
+		"Credit",
+		period_list,
+		only_current_fiscal_year=False,
+		filters=filters,
+		accumulated_values=filters.accumulated_values,
+	)
 	income = get_data(
 		filters.company,
 		"Income",
@@ -36,19 +70,6 @@ def execute(filters=None):
 		ignore_accumulated_values_for_fy=True,
 	)
 
-	asset = get_data(
-		filters.company,
-		"Asset",
-		"Credit",
-		period_list,
-		filters=filters,
-		accumulated_values=filters.accumulated_values,
-		ignore_closing_entries=True,
-		ignore_accumulated_values_for_fy=True,
-	)
-	
-	income.extend(asset)
-	
 	expense = get_data(
 		filters.company,
 		"Expense",
@@ -60,58 +81,75 @@ def execute(filters=None):
 		ignore_accumulated_values_for_fy=True,
 	)
 
-	liability = get_data(
-		filters.company,
-		"Liability",
-		"Credit",
-		period_list,
-		filters=filters,
-		accumulated_values=filters.accumulated_values,
-		ignore_closing_entries=True,
-		ignore_accumulated_values_for_fy=True,
-	)
-	
-	expense.extend(liability)
-
-	net_profit_loss = get_net_profit_loss(
-		income, expense, period_list, filters.company, filters.presentation_currency
-	)
+	message, opening_balance = check_opening_balance(asset, liability, equity, income, expense)
 
 	data = []
+	data.extend(asset or [])
+	data.extend(liability or [])
+	data.extend(equity or [])
 	data.extend(income or [])
 	data.extend(expense or [])
-	if net_profit_loss:
-		data.append(net_profit_loss)
+	if opening_balance and round(opening_balance, 2) != 0:
+		unclosed = {
+			"account_name": "'" + _("Unclosed Fiscal Years Profit / Loss (Credit)") + "'",
+			"account": "'" + _("Unclosed Fiscal Years Profit / Loss (Credit)") + "'",
+			"warn_if_negative": True,
+			"currency": currency,
+		}
+		for period in period_list:
+			unclosed[period.key] = opening_balance
 
-	columns = get_columns(filters.periodicity, period_list, filters.accumulated_values, filters.company)
+		unclosed["total"] = opening_balance
+		data.append(unclosed)
+
+	columns = get_columns(
+		filters.periodicity, period_list, filters.accumulated_values, company=filters.company
+	)
 
 	columns = get_difference_columns(columns, filters)
-	
-	chart = get_chart_data(filters, columns, income, expense, net_profit_loss)
 
-	currency = filters.presentation_currency or frappe.get_cached_value(
-		"Company", filters.company, "default_currency"
-	)
+	chart = get_chart_data(filters, columns, asset, liability, equity, income, expense, currency)
+
 	report_summary, primitive_summary = get_report_summary(
-		period_list, filters.periodicity, income, expense, net_profit_loss, currency, filters
+		period_list, asset, liability, equity, income, expense, {}, currency, filters
 	)
 
 	data = get_difference_data(columns, data)
-	return columns, data, None, chart, report_summary, primitive_summary
+
+	return columns, data, message, chart, report_summary, primitive_summary
+
 
 def get_difference_data(columns, data):
-	diff_w_columns = []
-	for row in columns:
-		if "diff_with_" in row.get("fieldname"): 
-			diff_w_columns.append(row.get("fieldname"))
+    diff_w_columns = []
+    percent_diff_columns = []
+    for row in columns:
+        if "diff_with_" in row.get("fieldname"): 
+            diff_w_columns.append(row.get("fieldname"))
+        if "percent_diff_with_" in row.get("fieldname"):
+            percent_diff_columns.append(row.get("fieldname"))
 
-	for row in data:
-		for col in diff_w_columns:
-			months = col.split("diff_with_")[1].split("_and_")
-			
-			row[col] = row.get(months[1], 0) - row.get(months[0], 0)
+    for row in data:
+        for col in diff_w_columns:
+            months = col.split("diff_with_")[1].split("_and_")
+            old_value = row.get(months[0], 0)  
+            new_value = row.get(months[1], 0)  
 
-	return data
+            row[col] = new_value - old_value
+
+        for col in percent_diff_columns:
+            months = col.split("percent_diff_with_")[1].split("_and_")
+            old_value = row.get(months[0], 0)  
+            new_value = row.get(months[1], 0)  
+
+            # Avoid division by zero by checking if old_value is not 0
+            if old_value != 0:
+                percentage_diff = ((new_value/old_value)*100)
+            else:
+                percentage_diff = 0  
+            row[col] = percentage_diff  
+
+    return data
+
 
 def get_difference_columns(columns, filters):
 	flag = False
@@ -119,10 +157,11 @@ def get_difference_columns(columns, filters):
 	columns_new = []
 
 	for row in columns:
-		columns_new.append(row)
-
+		columns_new.append(row) 
+        
 		if flag and row.get("fieldtype")  == "Currency":
-			if filters.get("show_difference") in [ "Monthly"]:
+
+			if filters.get("show_difference") in ["Monthly"]:
 				columns_new.append({
 					'fieldname': f'diff_with_{old_value.get("fieldname")}_and_{row.get("fieldname")}', 
 					'label': f'Diff W/{old_value.get("label")}', 
@@ -130,19 +169,25 @@ def get_difference_columns(columns, filters):
 					'options': 'currency', 
 					'width': 150
 				})
+				columns_new.append({
+						'fieldname': f'percent_diff_with_{old_value.get("fieldname")}_and_{row.get("fieldname")}',
+						'label': f'Percent Diff W/{old_value.get("label")}', 
+						'fieldtype': 'Percent', 
+						'width': 150
+				})	
 
-			if filters.get("show_difference") in [ "Yearly"]:
+			if filters.get("show_difference") in ["Yearly"]:
 			
 				month = row.get("fieldname").split("_")
 				
 				if len(month) < 2:
-					continue
+					continue 
 		
 				month = f"{month[0]}_{int(month[1])-1}"
 
 				month_name = row.get("label").split(" ")
 				month_name = f"{month_name[0]} {int(month_name[1])-1}"
-
+		
 				columns_new.append({
 					'fieldname': f'diff_with_{month}_and_{row.get("fieldname")}', 
 					'label': f'Diff W/{month_name}', 
@@ -150,7 +195,12 @@ def get_difference_columns(columns, filters):
 					'options': 'currency', 
 					'width': 150
 				})
-
+				columns_new.append({
+						'fieldname': f'percent_diff_with_{month_name}_and_{row.get("fieldname")}',
+						'label': f'Percent Diff W/{month_name}', 
+						'fieldtype': 'Percent', 
+						'width': 150
+				})
 		if row.get("fieldtype")  == "Currency":
 			flag = True
 		
@@ -162,108 +212,107 @@ def get_difference_columns(columns, filters):
 
 	return columns
 
+def check_opening_balance(asset, liability, equity, income, expense):
+	# Check if previous year balance sheet closed
+	opening_balance = 0
+	float_precision = cint(frappe.db.get_default("float_precision")) or 2
+	if asset:
+		opening_balance = flt(asset[-1].get("opening_balance", 0), float_precision)
+	if liability:
+		opening_balance -= flt(liability[-1].get("opening_balance", 0), float_precision)
+	if equity:
+		opening_balance -= flt(equity[-1].get("opening_balance", 0), float_precision)
+
+	if income:
+		opening_balance -= flt(income[-1].get("opening_balance", 0), float_precision)
+	if expense:
+		opening_balance -= flt(expense[-1].get("opening_balance", 0), float_precision)
+
+	opening_balance = flt(opening_balance, float_precision)
+	if opening_balance:
+		return _("Previous Financial Year is not closed"), opening_balance
+	return None, None
+
 
 def get_report_summary(
-	period_list, periodicity, income, expense, net_profit_loss, currency, filters, consolidated=False
+	period_list,
+	asset,
+	liability,
+	equity,
+	income, 
+	expense,
+	provisional_profit_loss,
+	currency,
+	filters,
+	consolidated=False,
 ):
-	net_income, net_expense, net_profit = 0.0, 0.0, 0.0
+	net_asset, net_liability, net_equity, net_income, net_expense,net_provisional_profit_loss = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+	if filters.get("accumulated_values"):
+		period_list = [period_list[-1]]
 
 	# from consolidated financial statement
 	if filters.get("accumulated_in_group_company"):
 		period_list = get_filtered_list_for_consolidated_report(filters, period_list)
 
-	if filters.accumulated_values:
-		# when 'accumulated_values' is enabled, periods have running balance.
-		# so, last period will have the net amount.
-		key = period_list[-1].key
-		if income:
-			net_income = income[-2].get(key)
-		if expense:
-			net_expense = expense[-2].get(key)
-		if net_profit_loss:
-			net_profit = net_profit_loss.get(key)
-	else:
-		for period in period_list:
-			key = period if consolidated else period.key
-			if income:
-				net_income += income[-2].get(key)
-			if expense:
-				net_expense += expense[-2].get(key)
-			if net_profit_loss:
-				net_profit += net_profit_loss.get(key)
+	for period in period_list:
+		key = period if consolidated else period.key
+		if asset:
+			net_asset += asset[-2].get(key)
+		if liability and liability[-1] == {}:
+			net_liability += liability[-2].get(key)
+		if equity and equity[-1] == {}:
+			net_equity += equity[-2].get(key)
+		if income and income[-1] == {}:
+			net_income += income[-2].get(key)
+		if expense and expense[-1] == {}:
+			net_expense += expense[-2].get(key)
 
-	if len(period_list) == 1 and periodicity == "Yearly":
-		profit_label = _("Profit This Year")
-		income_label = _("Total Income This Year")
-		expense_label = _("Total Expense This Year")
-	else:
-		profit_label = _("Net Profit")
-		income_label = _("Total Income")
-		expense_label = _("Total Expense")
+		if provisional_profit_loss:
+			net_provisional_profit_loss += provisional_profit_loss.get(key)
 
 	return [
-		{"value": net_income, "label": income_label, "datatype": "Currency", "currency": currency},
-		{"type": "separator", "value": "-"},
-		{"value": net_expense, "label": expense_label, "datatype": "Currency", "currency": currency},
-		{"type": "separator", "value": "=", "color": "blue"},
+		{"value": net_asset, "label": _("Total Asset"), "datatype": "Currency", "currency": currency},
 		{
-			"value": net_profit,
-			"indicator": "Green" if net_profit > 0 else "Red",
-			"label": profit_label,
+			"value": net_liability,
+			"label": _("Total Liability"),
 			"datatype": "Currency",
 			"currency": currency,
 		},
-	], net_profit
+		{"value": net_equity, "label": _("Total Equity"), "datatype": "Currency", "currency": currency},
+		{"value": net_income, "label": _("Total Income"), "datatype": "Currency", "currency": currency},
+		{"value": net_expense, "label": _("Total Expense"), "datatype": "Currency", "currency": currency},
+	], (net_asset - net_liability + net_equity)
 
 
-def get_net_profit_loss(income, expense, period_list, company, currency=None, consolidated=False):
-	total = 0
-	net_profit_loss = {
-		"account_name": "'" + _("Profit for the year") + "'",
-		"account": "'" + _("Profit for the year") + "'",
-		"warn_if_negative": True,
-		"currency": currency or frappe.get_cached_value("Company", company, "default_currency"),
-	}
-
-	has_value = False
-
-	for period in period_list:
-		key = period if consolidated else period.key
-		total_income = flt(income[-2][key], 3) if income else 0
-		total_expense = flt(expense[-2][key], 3) if expense else 0
-
-		net_profit_loss[key] = total_income - total_expense
-
-		if net_profit_loss[key]:
-			has_value = True
-
-		total += flt(net_profit_loss[key])
-		net_profit_loss["total"] = total
-
-	if has_value:
-		return net_profit_loss
-
-
-def get_chart_data(filters, columns, income, expense, net_profit_loss):
+def get_chart_data(filters, columns, asset, liability, equity, income, expense, currency):
 	labels = [d.get("label") for d in columns[2:]]
 
-	income_data, expense_data, net_profit = [], [], []
+	asset_data, liability_data, equity_data, income_data, expense_data = [], [],[], [], []
 
 	for p in columns[2:]:
+		if asset:
+			asset_data.append(asset[-2].get(p.get("fieldname")))
+		if liability:
+			liability_data.append(liability[-2].get(p.get("fieldname")))
+		if equity:
+			equity_data.append(equity[-2].get(p.get("fieldname")))
 		if income:
 			income_data.append(income[-2].get(p.get("fieldname")))
 		if expense:
 			expense_data.append(expense[-2].get(p.get("fieldname")))
-		if net_profit_loss:
-			net_profit.append(net_profit_loss.get(p.get("fieldname")))
 
 	datasets = []
+	if asset_data:
+		datasets.append({"name": _("Assets"), "values": asset_data})
+	if liability_data:
+		datasets.append({"name": _("Liabilities"), "values": liability_data})
+	if equity_data:
+		datasets.append({"name": _("Equity"), "values": equity_data})
 	if income_data:
 		datasets.append({"name": _("Income"), "values": income_data})
 	if expense_data:
 		datasets.append({"name": _("Expense"), "values": expense_data})
-	if net_profit:
-		datasets.append({"name": _("Net Profit/Loss"), "values": net_profit})
 
 	chart = {"data": {"labels": labels, "datasets": datasets}}
 
@@ -273,5 +322,7 @@ def get_chart_data(filters, columns, income, expense, net_profit_loss):
 		chart["type"] = "line"
 
 	chart["fieldtype"] = "Currency"
+	chart["options"] = "currency"
+	chart["currency"] = currency
 
 	return chart
