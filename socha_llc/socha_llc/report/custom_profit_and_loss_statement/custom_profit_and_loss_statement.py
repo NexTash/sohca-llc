@@ -119,44 +119,61 @@ def execute(filters=None):
 	return columns, data, message, chart, report_summary, primitive_summary
 
 
-def calculate_percentage_difference(old_value, new_value):
-    if old_value != 0:
-        return round(((new_value - old_value) / old_value) * 100)
-    return 0
-
 def get_difference_data(columns, data):
     diff_w_columns = []
     percent_diff_columns = []
 
-    for row in columns:
-        fieldname = row.get("fieldname")
+    # Extracting columns for differences and percentage differences
+    for column in columns:
+        fieldname = column.get("fieldname")
         if not fieldname:
             continue
         if "diff_with_" in fieldname:
             diff_w_columns.append(fieldname)
-        elif "percent_diff_with_" in fieldname:
+        elif "percent_with_" in fieldname:
             percent_diff_columns.append(fieldname)
+
 
     for row in data:
         for col in diff_w_columns:
             try:
                 months = col.split("diff_with_")[1].split("_and_")
-                old_value = float(row.get(months[0], 0))
-                new_value = float(row.get(months[1], 0))
+                old_value = float(row.get(months[0], 0) or 0)
+                new_value = float(row.get(months[1], 0) or 0)
                 row[col] = new_value - old_value
-            except (IndexError, ValueError):
+            except (IndexError, ValueError, TypeError) as e:
+                frappe.msgprint(f"Error calculating difference for {col}: {e}")
                 row[col] = None
 
+    for row in data:
         for col in percent_diff_columns:
             try:
-                months = col.split("percent_diff_with_")[1].split("_and_")
-                old_value = float(row.get(months[0], 0))
-                new_value = float(row.get(months[1], 0))
+                months = col.split("percent_with_")[1].split("_and_")
+                old_value = float(row.get(months[0], 0) or 0)
+                new_value = float(row.get(months[1], 0) or 0)
                 row[col] = calculate_percentage_difference(old_value, new_value)
-            except (IndexError, ValueError):
+            except (IndexError, ValueError, TypeError) as e:
+                frappe.msgprint(f"Error calculating percentage for {col}: {e}")
                 row[col] = None
 
     return data
+
+
+def calculate_percentage_difference(old_value, new_value):
+    """
+    Calculate percentage difference between old_value and new_value.
+    """
+    if old_value == 0:
+        if new_value == 0:
+            return 0 
+        return 100  
+
+    try:
+        return round(((new_value - old_value) / old_value) * 100, 2)
+    except Exception as e:
+        frappe.msgprint(f"Error in percentage calculation: {e}")
+        return None
+
 
 
 def get_difference_columns(columns, filters):
@@ -178,7 +195,7 @@ def get_difference_columns(columns, filters):
 					'width': 150
 				})
 				columns_new.append({
-						'fieldname': f'percent_diff_with_{old_value.get("fieldname")}_and_{row.get("fieldname")}',
+						'fieldname': f'percent_with_{old_value.get("fieldname")}_and_{row.get("fieldname")}',
 						'label': f'Percent Diff W/{old_value.get("label")}', 
 						'fieldtype': 'Percent', 
 						'width': 150
