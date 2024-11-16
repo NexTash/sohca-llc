@@ -119,34 +119,42 @@ def execute(filters=None):
 	return columns, data, message, chart, report_summary, primitive_summary
 
 
+def calculate_percentage_difference(old_value, new_value):
+    if old_value != 0:
+        return round(((new_value - old_value) / old_value) * 100)
+    return 0
+
 def get_difference_data(columns, data):
     diff_w_columns = []
     percent_diff_columns = []
+
     for row in columns:
-        if "diff_with_" in row.get("fieldname"): 
-            diff_w_columns.append(row.get("fieldname"))
-        if "percent_diff_with_" in row.get("fieldname"):
-            percent_diff_columns.append(row.get("fieldname"))
+        fieldname = row.get("fieldname")
+        if not fieldname:
+            continue
+        if "diff_with_" in fieldname:
+            diff_w_columns.append(fieldname)
+        elif "percent_diff_with_" in fieldname:
+            percent_diff_columns.append(fieldname)
 
     for row in data:
         for col in diff_w_columns:
-            months = col.split("diff_with_")[1].split("_and_")
-            old_value = row.get(months[0], 0)  
-            new_value = row.get(months[1], 0)  
-
-            row[col] = new_value - old_value
+            try:
+                months = col.split("diff_with_")[1].split("_and_")
+                old_value = float(row.get(months[0], 0))
+                new_value = float(row.get(months[1], 0))
+                row[col] = new_value - old_value
+            except (IndexError, ValueError):
+                row[col] = None
 
         for col in percent_diff_columns:
-            months = col.split("percent_diff_with_")[1].split("_and_")
-            old_value = row.get(months[0], 0)  
-            new_value = row.get(months[1], 0)  
-
-            # Avoid division by zero by checking if old_value is not 0
-            if old_value != 0:
-                percentage_diff = ((new_value/old_value)*100)
-            else:
-                percentage_diff = 0  
-            row[col] = percentage_diff  
+            try:
+                months = col.split("percent_diff_with_")[1].split("_and_")
+                old_value = float(row.get(months[0], 0))
+                new_value = float(row.get(months[1], 0))
+                row[col] = calculate_percentage_difference(old_value, new_value)
+            except (IndexError, ValueError):
+                row[col] = None
 
     return data
 
@@ -186,7 +194,10 @@ def get_difference_columns(columns, filters):
 				month = f"{month[0]}_{int(month[1])-1}"
 
 				month_name = row.get("label").split(" ")
+				#frappe.msgprint(f"{month_name}")
 				month_name = f"{month_name[0]} {int(month_name[1])-1}"
+				#frappe.msgprint(f"{month_name}")
+
 		
 				columns_new.append({
 					'fieldname': f'diff_with_{month}_and_{row.get("fieldname")}', 
@@ -201,6 +212,7 @@ def get_difference_columns(columns, filters):
 						'fieldtype': 'Percent', 
 						'width': 150
 				})
+				
 		if row.get("fieldtype")  == "Currency":
 			flag = True
 		
